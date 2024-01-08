@@ -1,0 +1,60 @@
+Alat je implementiran kao enkripcija, dekripcija i manipulacija pohranom koja je spremljena u binarnu datoteku
+encryptedData/data.bin
+
+Pohrana je implementirana tako da se uređeni parovi (stranica, lozinka), odnosno zapisi,
+pohranjuju sve zajedno u obliku znakovnog niza (Stringa) na način da su zapisi međusobno 
+odvojeni novim retkom, a zapis, primjerice (www.fer.unizg.hr, F3Rs1fR4) je zapisan kao podniz
+"www.fer.unizg.hr,F3Rs1fR4". Zarez je poseban znak, pa ako bismo htjeli njega imati u podacima onda ga 
+zapisujemo sa escape sekvencama koristeći znak backslash "\" (isto vrijedi i za zapisivanje samog znaka "\").
+Tako bismo, primjerice, zapis sa stranice "www,fer,unizg\hr" i lozinke "cu,dn\,a,Sifr\a" zapisali kao
+"www\,fer\,unizg\\hr,cu\,dn\\\,a\,Sifr\\a".
+
+Nakon spremanja 3 zapisa, primjerice:
+"./pwmgr init mp4$$w0rd", "./pwmgr put mp4$$w0rd www.fer.unizg.hr F3Rs1fR4",
+"./pwmgr put mp4$$w0rd www.facebook.com si,fra#123", "./pwmgr put mp4$$w0rd ferko.fer.hr SRSL4B"
+Stanje u pohrani (String) bi izgledao ovako:
+"www.fer.unizg.hr,F3Rs1fR4\n
+www.facebook.com,si\,fra#123\n
+ferko.fer.hr,SRSL4B\n"
+gdje je "\n" oznaka novog retka.
+
+Kako taj String zapis pohraniti na disk?
+Potrebno ga je pretvoriti u binarnu reprezentaciju.
+Najprije, kako sadržaj pohrane ne bi bio nikad prazan, kao prefiks (dakle na početak) se umeće slučajnih 16 bajtova.
+Nakon toga onaj veliki String, koristeći UTF-8 kodnu stranicu, se kodira u niz bajtova.
+I onda taj niz bajtova prefiks + niz UTF-8 bajtova čini "jasan tekst".
+
+To se enkriptira algoritmom AES256 u GCM načinu rada, što je autentificirana blok šifra. Pruža povjerljivost i integritet 
+jer se na kraj kriptata dodaje i potpis koji se provjerava prilikom dekriptiranja.
+Ali to nije cijeli sadržaj binarne datoteke data.bin. Prije same enkripcije potrebno je generirati tajni 256 bitni ključ.
+On se generira koristeći algoritam PBKDF2 sa HMAC-SHA256. Dakle potrebna nam je master lozinka, koju korisnik unosi, i 
+slučajno generirani (koristeći kriptografski generator slučajnih brojeva, dok to nije bio slučaj kod prefiksa jer tamo nije 
+bilo bitno) tzv. salt da bismo mogli generirati 256 bitni ključ za AES enkripciju.
+Uz pripremljen ključ, potrebno je, na isti način kao i salt, slučajno generirati inicijalizacijski vektor (IV) koji se koristi 
+za enkripciju kod blok šifre AES.
+I sada kada je pripremljen tajni simetrični ključ i IV, možemo dobiti kriptat iz niza bajtova "jasnog teksta".
+Ali, kako bi legitiman korisnik mogao ponovno pristupiti spremniku, mora uz master lozinku, znati i salt i IV kako bi uspješno 
+dekriptirao kriptat. Iz tog razloga se salt i IV stavljaju prije kriptata u originalnom obliku. Njihova javnost ne narušava 
+sigurnost jer opet ništa se ne može bez master lozinke.
+
+I onda u konačnici, binarna datoteka data.bin će biti sljedećeg formata:
+IV + salt + kriptat (zajedno sa oznakom).
+
+Kada želimo, primjerice, dohvatiti zapis, odnosno lozinku za neku stranicu, prvo moramo pristupiti pohrani, odnosno dekriptirati binarnu datoteku.
+Uz master lozinku koju mora unijeti korisnik, IV i salt se može pročitati direktno iz binarne datoteke, 
+te iz salta i master lozinke rekonstruirati tajni ključ pa koristeći IV obaviti dekripciju.
+Uz dekripciju obavlja se i verifikacija oznake, pa ako je
+1. unesena kriva master lozinka
+2. datoteka u međuvremenu mijenjana na bilo kojem mjestu
+Dekripcija neće uspjeti. I to je ono što želimo, povjerljivost i integritet.
+Naravno jednom kada dobijemo bajtove "čistog teksta", odbacimo onaj 16 bajtni prefiks, preostale bajtove koristeći UTF-8 kodnu
+stranicu pretvorimo nazad u veliki String, parsiramo veliki String po retcima, odvojimo jedini zarez koji nije escapean 
+(jer tada on označava separator između stranice i lozinke), izbacimo escape znakove i tako u cjelosti imamo sve zapise.
+
+Sigurnosni zahtjevi su zadovoljeni jer prilikom svake enkripcije koristimo drugi tajni ključ (zato što on ovisi o bajtovima salta, 
+koji su slučajni prilikom svake enkripcije) i uz to koristimo sigurnu autentificiranu šifru. 
+Napadač ne može nikakve informacije o stranicama i šiframa doznati, čak ni ako je nova lozinka jedna staroj, jer će se generirati 
+drukčiji ključ što će rezultirati drugim nizom bajtova. Jedino što napadač može doznati jest okvirna duljina cjelokupne String pohrane 
+na temelju veličine kriptirane datoteke. Napadač ne može narušiti ni integritet, jer se radi o autentificiranoj šifri. Bilokakva promjena
+binarne datoteke od strane napadača će biti prepoznata činjenicom da AES-GCM neće uspjeti potvrditi oznaku, jedino ako bi napadač 
+uspio nekako falsificirati oznaku, no to je praktički nemoguće.
